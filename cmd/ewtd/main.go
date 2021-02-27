@@ -2,45 +2,55 @@ package main
 
 import (
 	"fmt"
-	"time"
-
-	"github.com/tiero/ewt/pkg/zmq"
-	"github.com/vulpemventures/go-elements/network"
+	"os"
+	"os/signal"
+	"syscall"
 
 	log "github.com/sirupsen/logrus"
+
+	grpc "github.com/tiero/ewt/internal/interface/grpc"
+	rest "github.com/tiero/ewt/internal/interface/rest"
 )
 
 func main() {
-	fmt.Println("Hello from ewt daemon")
 
-	sub, err := zmq.NewSubscriber(&network.Regtest, "http://admin1:123@localhost:7041", ":28332", ":28333", time.Millisecond)
+	log.Info("starting esplora...")
+
+	grpcAddress := fmt.Sprintf(
+		":%+v",
+		8080,
+	)
+	restAddress := fmt.Sprintf(
+		":%+v",
+		8081,
+	)
+
+	// gRPC
+	esploraGrpcServer, err := grpc.NewServer(grpcAddress)
 	if err != nil {
-		log.Error("creating subscriber: ", err)
+		log.WithError(err).Fatal()
 	}
 
-	err = sub.Start()
+	// REST via gRPC gateway
+	esploraRestServer, err := rest.NewServer(restAddress, grpcAddress)
 	if err != nil {
-		log.Error("starting reading events: ", err)
+		log.WithError(err).Fatal()
 	}
 
-	consumer := sub.NewConsumer()
-	err = consumer.Start()
-	if err != nil {
-		log.Error("starting consuming events: ", err)
+	log.Info("esplora gRPC server listening on port " + grpcAddress)
+	if err := esploraGrpcServer.Start(); err != nil {
+		log.WithError(err).Fatal()
 	}
 
-	err = consumer.NotifyReceived([]string{"0014619ecfb33710cb9bc1d93bdf4cdd8330ef40cd18"})
-	if err != nil {
-		log.Error("listening notifications: ", err)
+	log.Info("esplora REST server listening on port " + restAddress)
+	if err := esploraRestServer.Start(); err != nil {
+		log.WithError(err).Fatal()
 	}
 
-	for {
-		c := <-consumer.Notifications()
-		tx, ok := c.(zmq.RelevantTx)
-		if !ok {
-			continue
-		}
-		log.Infof("Received new tx with id %s at time %s", tx.TxRecord.Tx.TxHash().String(), tx.TxRecord.Received.String())
-	}
+	// Gracefully handle SIGTERM & SIGINT signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+	<-sigChan
 
+	log.Info("shutting down esplora...")
 }
